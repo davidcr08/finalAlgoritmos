@@ -1,4 +1,4 @@
-"""Construye data/processed/corpus.json a partir de data/pdfs/*.pdf.
+"""Construye data/processed/corpus.json a partir de los PDFs de data/pdfs/.
 
 Uso (desde la raíz del repositorio):
     python -m src.ingestion.build_corpus
@@ -20,6 +20,15 @@ from src.ingestion.pdf_reader import (
 PDF_DIR = Path("data/pdfs")
 OUT_FILE = Path("data/processed/corpus.json")
 OVERRIDES_FILE = Path("data/overrides.json")
+EXPECTED_PDFS = 20
+
+
+def list_pdfs(pdf_dir: Path = PDF_DIR) -> list[Path]:
+    """PDFs de la carpeta (cualquier combinación de mayúsculas en la extensión), por nombre."""
+    if not pdf_dir.is_dir():
+        return []
+    pdfs = [p for p in pdf_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"]
+    return sorted(pdfs, key=lambda p: p.name.lower())
 
 
 def build_corpus(pdf_dir: Path = PDF_DIR, overrides_file: Path = OVERRIDES_FILE) -> list[dict]:
@@ -28,7 +37,7 @@ def build_corpus(pdf_dir: Path = PDF_DIR, overrides_file: Path = OVERRIDES_FILE)
         overrides = json.loads(overrides_file.read_text(encoding="utf-8"))
 
     corpus = []
-    for idx, pdf in enumerate(sorted(pdf_dir.glob("*.pdf")), start=1):
+    for idx, pdf in enumerate(list_pdfs(pdf_dir), start=1):
         review = []
         try:
             text, meta_title = read_first_pages(str(pdf))
@@ -74,6 +83,13 @@ def build_corpus(pdf_dir: Path = PDF_DIR, overrides_file: Path = OVERRIDES_FILE)
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+    n_pdfs = len(list_pdfs())
+    if n_pdfs == 0:
+        print(f"No hay PDFs en '{PDF_DIR}'. Copia allí los artículos del corpus y vuelve a ejecutar.")
+        sys.exit(1)
+    if n_pdfs != EXPECTED_PDFS:
+        print(f"AVISO: se esperaban {EXPECTED_PDFS} PDFs y hay {n_pdfs} en '{PDF_DIR}'.\n")
 
     corpus = build_corpus()
     OUT_FILE.parent.mkdir(parents=True, exist_ok=True)

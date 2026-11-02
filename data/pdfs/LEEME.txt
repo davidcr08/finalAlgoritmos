@@ -1,0 +1,11 @@
+Coloca aquí, a mano, los 20 artículos del corpus en formato PDF.
+Luego ejecuta, desde la raíz del repositorio:
+
+    python -m src.ingestion.build_corpus
+
+Los PDFs no se suben a git (ver .gitignore); lo que se versiona es
+data/processed/corpus.json, generado a partir de ellos.
+
+Importante: el id de cada artículo (A01, A02...) depende del orden
+alfabético del nombre del archivo. No renombres ni agregues archivos
+después de empezar a documentar, o los ids cambiarán de lugar.
