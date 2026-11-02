@@ -1,3 +1,2 @@
 pytest
-pypdf
-pypdf
+pymupdf

@@ -3,10 +3,14 @@
 Uso (desde la raíz del repositorio):
     python -m src.ingestion.build_corpus
 
-Si algún campo sale mal, se corrige en data/overrides.json:
-    {"archivo.pdf": {"title": "...", "authors": "...", "abstract": "..."}}
+Ajustes por artículo en data/overrides.json. La clave puede ser el nombre exacto
+del archivo o su prefijo numérico ("7."). Campos admitidos:
+    title, authors, abstract          -> reemplazan lo detectado
+    abstract_end_phrase               -> frase con la que empieza el texto que sigue al abstract
+    abstract_start_trim               -> último fragmento previo al abstract (p. ej. la última keyword)
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -14,6 +18,7 @@ from src.ingestion.pdf_reader import (
     find_abstract,
     guess_authors,
     guess_title,
+    normalize_text,
     read_first_pages,
 )
 
@@ -23,12 +28,22 @@ OVERRIDES_FILE = Path("data/overrides.json")
 EXPECTED_PDFS = 20
 
 
+def _natural_key(name: str) -> list:
+    """Orden natural: '2. a.pdf' va antes que '10. b.pdf'."""
+    return [int(p) if p.isdigit() else p for p in re.split(r"(\d+)", name.lower())]
+
+
 def list_pdfs(pdf_dir: Path = PDF_DIR) -> list[Path]:
-    """PDFs de la carpeta (cualquier combinación de mayúsculas en la extensión), por nombre."""
+    """PDFs de la carpeta (cualquier combinación de mayúsculas en la extensión), en orden natural."""
     if not pdf_dir.is_dir():
         return []
     pdfs = [p for p in pdf_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"]
-    return sorted(pdfs, key=lambda p: p.name.lower())
+    return sorted(pdfs, key=lambda p: _natural_key(p.name))
+
+
+def _override_for(overrides: dict, pdf: Path) -> dict:
+    prefix = pdf.name.split(" ")[0]
+    return {**overrides.get(prefix, {}), **overrides.get(pdf.name, {})}
 
 
 def build_corpus(pdf_dir: Path = PDF_DIR, overrides_file: Path = OVERRIDES_FILE) -> list[dict]:
@@ -39,17 +54,20 @@ def build_corpus(pdf_dir: Path = PDF_DIR, overrides_file: Path = OVERRIDES_FILE)
     corpus = []
     for idx, pdf in enumerate(list_pdfs(pdf_dir), start=1):
         review = []
+        ov = _override_for(overrides, pdf)
         try:
             text, meta_title = read_first_pages(str(pdf))
         except Exception as exc:  # PDF dañado o ilegible
             text, meta_title = "", None
             review.append(f"no se pudo leer el PDF ({exc})")
 
-        abstract, abs_pos = find_abstract(text)
+        text = normalize_text(text)
+        abstract, abs_pos = find_abstract(
+            text, ov.get("abstract_end_phrase"), ov.get("abstract_start_trim")
+        )
         title, title_src = guess_title(text, meta_title)
         authors = guess_authors(text[:abs_pos] if abs_pos > 0 else text[:800], title)
 
-        ov = overrides.get(pdf.name, {})
         title = ov.get("title", title)
         authors = ov.get("authors", authors)
         abstract = ov.get("abstract", abstract)
@@ -98,9 +116,13 @@ def main() -> None:
     print(f"{len(corpus)} PDFs procesados -> {OUT_FILE}\n")
     for doc in corpus:
         estado = "OK " if not doc["needs_review"] else "REV"
+        ab = doc["abstract"]
         print(f"[{estado}] {doc['id']}  {doc['abstract_words']:>4} palabras  {doc['file']}")
         print(f"        título : {doc['title'][:90]}")
         print(f"        autores: {doc['authors'][:90]}")
+        if ab:
+            print(f"        inicio : {ab[:70]}")
+            print(f"        final  : ...{ab[-70:]}")
         for motivo in doc["needs_review"]:
             print(f"        ! {motivo}")
 
