@@ -118,7 +118,7 @@ def _find_closest_clusters(
     best_dist = float("inf")
     best_i = -1
     best_j = -1
-    
+
     for i in range(n):
         if not active[i]:
             continue
@@ -126,14 +126,14 @@ def _find_closest_clusters(
             if not active[j]:
                 continue
             dist = _cluster_distance(D, clusters[i], clusters[j], method, sizes)
-            if dist < best_dist - 1e-12:
+            if dist < best_dist:
                 best_dist = dist
                 best_i, best_j = i, j
-            elif abs(dist - best_dist) < 1e-12:
-                # Desempate: menores ids
+            elif dist == best_dist:
+                # Desempate estricto: menor id_a, luego menor id_b
                 if i < best_i or (i == best_i and j < best_j):
                     best_i, best_j = i, j
-    
+
     return best_i, best_j, best_dist
 
 
@@ -267,17 +267,17 @@ def _get_clusters_at_k(tree: dict, n_leaves: int, k: int, linkage: LinkageMatrix
     return [tree[c]["leaves"] for c in active_clusters]
 
 
-def cophenetic_correlation(D: np.ndarray, linkage: LinkageMatrix) -> float:
+def _cophenetic_correlation_internal(D: np.ndarray, linkage: LinkageMatrix) -> float:
     """
-    Coeficiente de correlación cofenética.
+    Coeficiente de correlación cofenética (versión interna).
     Correlación entre distancias originales y distancias cofenéticas (altura de fusión).
     """
     n = linkage.n_leaves
     tree = _build_tree_from_linkage(linkage)
-    
+
     # Matriz de distancias cofenéticas
     D_coph = np.zeros((n, n))
-    
+
     for i in range(n):
         for j in range(i + 1, n):
             # Encontrar LCA (lowest common ancestor) de i y j
@@ -287,16 +287,50 @@ def cophenetic_correlation(D: np.ndarray, linkage: LinkageMatrix) -> float:
                 if i in tree[cluster_id]["leaves"] and j in tree[cluster_id]["leaves"]:
                     D_coph[i, j] = D_coph[j, i] = tree[cluster_id]["height"]
                     break
-    
+
     # Correlación de Pearson entre partes superiores triangulares
     mask = np.triu_indices(n, k=1)
     x = D[mask]
     y = D_coph[mask]
-    
+
     if np.std(x) == 0 or np.std(y) == 0:
-        return 1.0 if np.allclose(x, y) else 0.0
-    
+        return 0.0
+
     return float(np.corrcoef(x, y)[0, 1])
+
+
+# Compatibilidad: firma original para consumidores existentes (tests, servicios)
+# y API pública nueva (list[list[float]], list[list[float]])
+def cophenetic_correlation(dist, Z):
+    """
+    Coeficiente de correlación cofenética.
+    
+    Soporta dos firmas:
+    1. (np.ndarray, LinkageMatrix) - firma interna original
+    2. (list[list[float]], list[list[float]]) - API pública spec
+    """
+    # Detectar firma por tipo del segundo argumento (LinkageMatrix tiene atributo n_leaves)
+    if hasattr(Z, 'n_leaves') and hasattr(Z, 'matrix'):
+        # Firma interna original
+        return _cophenetic_correlation_internal(dist, Z)
+    else:
+        # API pública spec
+        n = len(dist)
+        if n != len(dist[0]):
+            raise ValueError("dist debe ser cuadrada")
+        if len(Z) != n - 1:
+            raise ValueError(f"Z debe tener {n-1} filas")
+
+        D = np.array(dist, dtype=float)
+        C = np.array(cophenetic_matrix(Z, n), dtype=float)
+
+        mask = np.triu_indices(n, k=1)
+        x = D[mask]
+        y = C[mask]
+
+        if np.std(x) == 0 or np.std(y) == 0:
+            return 0.0
+        return float(np.corrcoef(x, y)[0, 1])
 
 
 def _silhouette_for_clustering(D: np.ndarray, clusters: list[set[int]]) -> float:
@@ -379,7 +413,7 @@ def evaluate_clustering(D: np.ndarray, linkage: LinkageMatrix) -> ClusterResult:
     """
     Evaluación completa: cofenética + siluetas k=2..6 + mejor k.
     """
-    coph = cophenetic_correlation(D, linkage)
+    coph = _cophenetic_correlation_internal(D, linkage)
     sil_scores = silhouette_scores(D, linkage)
     
     # Mejor k = mayor silueta promedio
@@ -432,3 +466,252 @@ def _demo():
 
 if __name__ == "__main__":
     _demo()
+
+
+# ============================================================================
+# API PÚBLICA — Firmas compatibles con la especificación del Requerimiento 2
+# ============================================================================
+
+def _validate_distance_matrix_spec(dist: list[list[float]]) -> np.ndarray:
+    """Valida matriz de distancias según spec: ValueError con tolerancia 1e-9."""
+    n = len(dist)
+    if n < 2:
+        raise ValueError("La matriz debe tener al menos 2 elementos (n >= 2)")
+    # Cuadrada
+    for i, row in enumerate(dist):
+        if len(row) != n:
+            raise ValueError(f"Fila {i} tiene longitud {len(row)}, se esperaba {n}")
+    # Validar todos los elementos: finitos, diagonal=0, simétrica, no negativos
+    for i in range(n):
+        for j in range(n):
+            val = dist[i][j]
+            if not math.isfinite(val):
+                raise ValueError(f"Distancia dist[{i}][{j}] no es finita (NaN o infinito): {val}")
+    # Diagonal = 0
+    for i in range(n):
+        if abs(dist[i][i]) > 1e-9:
+            raise ValueError(f"Diagonal dist[{i}][{i}] = {dist[i][i]} != 0 (tol 1e-9)")
+    # Simétrica y no negativos (solo i < j para evitar duplicados)
+    for i in range(n):
+        for j in range(i + 1, n):
+            if abs(dist[i][j] - dist[j][i]) > 1e-9:
+                raise ValueError(f"Matriz no simétrica: dist[{i}][{j}]={dist[i][j]} != dist[{j}][{i}]={dist[j][i]} (tol 1e-9)")
+            if dist[i][j] < -1e-9:
+                raise ValueError(f"Distancia negativa: dist[{i}][{j}] = {dist[i][j]}")
+    return np.array(dist, dtype=float)
+
+
+def _validate_method(method: str) -> Literal["single", "complete", "average"]:
+    if method not in ("single", "complete", "average"):
+        raise ValueError(f"Método inválido: '{method}'. Debe ser 'single', 'complete' o 'average'")
+    return method  # type: ignore
+
+
+def agglomerative_linkage(dist: list[list[float]], method: str) -> list[tuple[int, int, float, int]]:
+    """
+    Clustering aglomerativo jerárquico (API pública compatible con spec).
+
+    Args:
+        dist: Matriz de distancias n x n como lista de listas (simétrica, diagonal=0).
+        method: "single", "complete" o "average".
+
+    Returns:
+        Lista de n-1 tuplas (a, b, altura, tamaño) con a < b.
+        Hojas: 0..n-1. Clusters nuevos: n, n+1, ...
+
+    Raises:
+        ValueError: n < 2, matriz no cuadrada, no simétrica (tol 1e-9),
+                    diagonal != 0 (tol 1e-9), valores negativos, método inválido.
+    """
+    _validate_method(method)
+    D = _validate_distance_matrix_spec(dist)
+
+    # Delegar a la implementación interna
+    linkage = agglomerative_clustering(D, method)  # type: ignore
+
+    # Convertir a lista de tuplas (a, b, altura, tamaño) con enteros para a,b,tamaño
+    result = []
+    for row in linkage.matrix:
+        a, b, height, size = row
+        result.append((int(a), int(b), float(height), int(size)))
+    return result
+
+
+def _validate_linkage_z(Z: list[list[float]], n: int) -> None:
+    """Valida la estructura de una matriz de enlace Z."""
+    if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+        raise ValueError("n debe ser un entero >= 1")
+
+    if len(Z) != n - 1:
+        raise ValueError(f"Z debe tener {n-1} filas, tiene {len(Z)}")
+
+    active = set(range(n))
+    sizes = {i: 1 for i in range(n)}
+
+    for row_idx, row in enumerate(Z):
+        if not isinstance(row, (list, tuple)) or len(row) != 4:
+            raise ValueError(
+                f"La fila {row_idx} debe contener exactamente 4 valores"
+            )
+
+        try:
+            raw_a, raw_b, raw_height, raw_size = row
+
+            a_float = float(raw_a)
+            b_float = float(raw_b)
+            height = float(raw_height)
+            size_float = float(raw_size)
+
+            if not all(math.isfinite(v) for v in (
+                a_float, b_float, height, size_float
+            )):
+                raise ValueError("La fila contiene valores no finitos")
+
+            if not a_float.is_integer() or not b_float.is_integer():
+                raise ValueError("Los identificadores deben ser enteros")
+
+            if not size_float.is_integer():
+                raise ValueError("El tamaño debe ser un entero")
+
+            a, b = int(a_float), int(b_float)
+            size = int(size_float)
+
+        except (TypeError, OverflowError) as exc:
+            raise ValueError(
+                f"Valores inválidos en la fila {row_idx}"
+            ) from exc
+
+        if a == b:
+            raise ValueError("No se puede fusionar un cluster consigo mismo")
+
+        if a not in active or b not in active:
+            raise ValueError(
+                f"Identificadores inválidos o inactivos en la fila {row_idx}"
+            )
+
+        if height < 0:
+            raise ValueError("Las distancias de enlace no pueden ser negativas")
+
+        new_id = n + row_idx
+        expected_size = sizes[a] + sizes[b]
+
+        if size != expected_size:
+            raise ValueError(
+                f"Tamaño incorrecto en fila {row_idx}: "
+                f"esperado {expected_size}, recibido {size}"
+            )
+
+        active.remove(a)
+        active.remove(b)
+        active.add(new_id)
+        sizes[new_id] = expected_size 
+
+        
+def _build_tree_from_Z(Z: list[list[float]], n: int) -> dict:
+    """Construye árbol desde linkage matrix en formato spec (lista de listas)."""
+    tree = {}
+    # Hojas
+    for i in range(n):
+        tree[i] = {"left": None, "right": None, "height": 0.0, "size": 1, "leaves": {i}}
+    # Clusters internos
+    for row_idx, row in enumerate(Z):
+        id_a, id_b, height, size = row
+        id_a, id_b = int(id_a), int(id_b)
+        new_id = n + row_idx
+        leaves_a = tree[id_a]["leaves"]
+        leaves_b = tree[id_b]["leaves"]
+        tree[new_id] = {
+            "left": id_a,
+            "right": id_b,
+            "height": float(height),
+            "size": int(size),
+            "leaves": leaves_a | leaves_b,
+        }
+    return tree
+
+
+def cophenetic_matrix(Z: list[list[float]], n: int) -> list[list[float]]:
+    """
+    Matriz de distancias cofenéticas.
+
+    Args:
+        Z: Linkage matrix (n-1 filas [a, b, altura, tamaño]).
+        n: Número de hojas originales.
+
+    Returns:
+        Matriz n x n donde C[i][j] = altura de la fusión donde i y j se unen.
+        Diagonal = 0. Simétrica.
+    """
+    _validate_linkage_z(Z, n)
+
+    tree = _build_tree_from_Z(Z, n)
+
+    C = [[0.0] * n for _ in range(n)]
+    for i in range(n):
+        for j in range(i + 1, n):
+            # Encontrar LCA (primer cluster interno que contiene a ambos)
+            for cluster_id in range(n, n + len(Z)):
+                if i in tree[cluster_id]["leaves"] and j in tree[cluster_id]["leaves"]:
+                    height = tree[cluster_id]["height"]
+                    C[i][j] = C[j][i] = height
+                    break
+    return C
+
+
+def cut_tree(Z: list[list[float]], n: int, k: int) -> list[int]:
+    """
+    Corta el árbol para obtener k clusters.
+
+    Args:
+        Z: Linkage matrix (n-1 filas).
+        n: Número de hojas.
+        k: Número de clusters deseados (1 <= k <= n).
+
+    Returns:
+        Lista de longitud n con etiquetas 0..k-1 asignadas por orden de
+        primera aparición recorriendo las hojas 0..n-1.
+
+    Raises:
+        ValueError: si no 1 <= k <= n.
+    """
+    _validate_linkage_z(Z, n)
+
+    if not isinstance(k, int) or isinstance(k, bool) or not (1 <= k <= n):
+        raise ValueError(f"k debe estar en [1, {n}], recibido {k}")
+
+    if k == 1:
+        return [0] * n
+    if k >= n:
+        return list(range(n))
+
+    tree = _build_tree_from_Z(Z, n)
+
+    # Aplicar solo las primeras n-k fusiones
+    n_merges = n - k
+    active_clusters = list(range(n))
+
+    for row_idx in range(n_merges):
+        row = Z[row_idx]
+        id_a, id_b = int(row[0]), int(row[1])
+        new_id = n + row_idx
+        active_clusters = [c for c in active_clusters if c not in (id_a, id_b)]
+        active_clusters.append(new_id)
+
+    # Mapear cada hoja a su cluster activo
+    leaf_to_cluster = {}
+    for cluster_idx, cluster_id in enumerate(active_clusters):
+        for leaf in tree[cluster_id]["leaves"]:
+            leaf_to_cluster[leaf] = cluster_idx
+
+    # Etiquetas por orden de primera aparición recorriendo hojas 0..n-1
+    labels = []
+    seen_clusters = {}
+    next_label = 0
+    for leaf in range(n):
+        cluster = leaf_to_cluster[leaf]
+        if cluster not in seen_clusters:
+            seen_clusters[cluster] = next_label
+            next_label += 1
+        labels.append(seen_clusters[cluster])
+
+    return labels

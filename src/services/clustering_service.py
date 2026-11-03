@@ -79,37 +79,88 @@ class ClusteringService:
         
         return D
 
-    def _distance_matrix_embeddings(self, embeddings: dict[str, list[float]]) -> np.ndarray:
-        """d = 1 - coseno(embeddings), diagonal=0, simétrica."""
+    def _distance_matrix_embeddings(
+        self, embeddings: dict[str, list[float]]
+    ) -> np.ndarray:
+        """Calcula distancias coseno y valida los embeddings del corpus."""
         n = len(self.doc_ids)
+
+        # Todos los artículos deben tener un vector.
+        missing_ids = [doc_id for doc_id in self.doc_ids if doc_id not in embeddings]
+        if missing_ids:
+            raise ValueError(
+                f"Faltan embeddings para los artículos: {', '.join(missing_ids)}"
+            )
+
+        # Convertir y validar dimensiones y valores.
+        vectors = {}
+        expected_dim = None
+
+        for doc_id in self.doc_ids:
+            try:
+                vector = np.asarray(embeddings[doc_id], dtype=float)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Embedding inválido para el artículo {doc_id}"
+                ) from exc
+
+            if vector.ndim != 1 or vector.size == 0:
+                raise ValueError(f"Dimensión inválida para el artículo {doc_id}")
+
+            if not np.all(np.isfinite(vector)):
+                raise ValueError(
+                    f"El embedding de {doc_id} contiene valores no finitos"
+                )
+
+            if expected_dim is None:
+                expected_dim = vector.size
+            elif vector.size != expected_dim:
+                raise ValueError(
+                    f"Dimensiones incompatibles: {doc_id} tiene {vector.size}, "
+                    f"se esperaba {expected_dim}"
+                )
+
+            vectors[doc_id] = vector
+
         D = np.zeros((n, n))
-        
+
         for i, id_a in enumerate(self.doc_ids):
-            vec_a = embeddings.get(id_a)
-            if vec_a is None:
-                continue
-            for j, id_b in enumerate(self.doc_ids):
-                if j <= i:
-                    continue
-                vec_b = embeddings.get(id_b)
-                if vec_b is None:
-                    continue
-                cos = cosine_similarity(vec_a, vec_b)
-                dist = 1.0 - cos
+            for j in range(i + 1, n):
+                id_b = self.doc_ids[j]
+                cos = cosine_similarity(vectors[id_a], vectors[id_b])
+                dist = max(0.0, 1.0 - cos)
                 D[i, j] = D[j, i] = dist
-        
+
         return D
 
     def get_distance_matrix(self, source: DistanceSource) -> np.ndarray:
         """Obtiene matriz de distancia según fuente seleccionada."""
         if source == "tfidf":
             return self._distance_matrix_tfidf()
-        elif source == "glove":
+
+        if source == "glove":
+            path = Path("data/processed/embeddings_glove.json")
+
+            if not path.exists():
+                raise FileNotFoundError(
+                    "No existe embeddings_glove.json. Genera los vectores con: "
+                    "python -m experiments.generate_embeddings glove"
+                )
+
             return self._distance_matrix_embeddings(self.embeddings_glove)
-        elif source == "fasttext":
+
+        if source == "fasttext":
+            path = Path("data/processed/embeddings_fasttext.json")
+
+            if not path.exists():
+                raise FileNotFoundError(
+                    "No existe embeddings_fasttext.json. Genera los vectores con: "
+                    "python -m experiments.generate_embeddings fasttext"
+                )
+
             return self._distance_matrix_embeddings(self.embeddings_fasttext)
-        else:
-            raise ValueError(f"Fuente desconocida: {source}")
+
+        raise ValueError(f"Fuente desconocida: {source}")
 
     # --- Clustering ---
 
