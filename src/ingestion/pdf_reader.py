@@ -75,7 +75,14 @@ def find_abstract(
         return None, -1
     body = re.sub(r"\s+", " ", m.group("body")).strip()
     if start_trim:
-        idx = body.lower().find(start_trim.lower())
+        # Búsqueda manual sin str.find (regla: no built-ins de búsqueda)
+        haystack = body.lower()
+        needle = start_trim.lower()
+        idx = -1
+        for i in range(len(haystack) - len(needle) + 1):
+            if haystack[i:i+len(needle)] == needle:
+                idx = i
+                break
         if idx != -1:
             body = body[idx + len(start_trim):].lstrip(" .,:;").strip()
     return (body or None), m.start()
