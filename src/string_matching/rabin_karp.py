@@ -48,13 +48,17 @@ def rabin_karp_search(
     base: int = 256,
     mod: int = 1_000_000_007,
     trace: bool = False,
+    pattern_hash: int | None = None,
+    high: int | None = None,
 ) -> RKResult:
     n, m = len(text), len(pattern)
     if m == 0 or m > n:
         return RKResult([], 0, 0, 0, hash_of(pattern, base, mod) if m else 0, base, mod)
 
-    high = power_mod(base, m - 1, mod)          # B^(m-1) mod Q
-    p_hash = hash_of(pattern, base, mod)
+    if pattern_hash is None:
+        pattern_hash = hash_of(pattern, base, mod)
+    if high is None:
+        high = power_mod(base, m - 1, mod)
     w_hash = hash_of(text[:m], base, mod)
 
     positions: list[int] = []
@@ -65,7 +69,7 @@ def rabin_karp_search(
 
     for i in range(n - m + 1):
         hash_comparisons += 1
-        if w_hash == p_hash:
+        if w_hash == pattern_hash:
             # Verificación carácter a carácter
             k = 0
             while k < m:
@@ -87,4 +91,4 @@ def rabin_karp_search(
         if i < n - m:
             w_hash = ((w_hash - ord(text[i]) * high) * base + ord(text[i + m])) % mod
 
-    return RKResult(positions, comparisons, hash_comparisons, collisions, p_hash, base, mod, steps)
+    return RKResult(positions, comparisons, hash_comparisons, collisions, pattern_hash, base, mod, steps)

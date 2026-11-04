@@ -29,12 +29,13 @@ def build_lps(pattern: str) -> list[int]:
     return lps
 
 
-def kmp_search(text: str, pattern: str, trace: bool = False) -> KMPResult:
+def kmp_search(text: str, pattern: str, trace: bool = False, lps: list[int] | None = None) -> KMPResult:
     n, m = len(text), len(pattern)
     if m == 0 or m > n:
         return KMPResult([], 0, build_lps(pattern) if m else [])
 
-    lps = build_lps(pattern)
+    if lps is None:
+        lps = build_lps(pattern)
     positions: list[int] = []
     steps: list[tuple] = []
     comparisons = 0

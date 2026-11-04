@@ -5,9 +5,8 @@ mayor desplazamiento entre dos heurísticas:
   - regla del carácter malo (bad character)
   - regla del sufijo bueno (good suffix, versión fuerte)
 
-Preprocesamiento: O(m + |alfabeto|). Búsqueda: O(n) en promedio y mejor caso
-sublineal (~n/m); con la regla del sufijo bueno fuerte, el peor caso es O(n)
-cuando el patrón no aparece en el texto.
+Preprocesamiento: O(m + |alfabeto|). Búsqueda: puede ser sublineal
+en el mejor caso; peor caso O(n*m), sin optimización de Galil.
 """
 from dataclasses import dataclass, field
 
@@ -60,13 +59,15 @@ def build_good_suffix(pattern: str) -> list[int]:
     return shift
 
 
-def boyer_moore_search(text: str, pattern: str, trace: bool = False) -> BMResult:
+def boyer_moore_search(text: str, pattern: str, trace: bool = False, bad_char: dict[str, int] | None = None, good_suffix: list[int] | None = None) -> BMResult:
     n, m = len(text), len(pattern)
     if m == 0 or m > n:
         return BMResult([], 0, build_bad_char(pattern), build_good_suffix(pattern) if m else [])
 
-    bad_char = build_bad_char(pattern)
-    good_suffix = build_good_suffix(pattern)
+    if bad_char is None:
+        bad_char = build_bad_char(pattern)
+    if good_suffix is None:
+        good_suffix = build_good_suffix(pattern)
     positions: list[int] = []
     steps: list[tuple] = []
     comparisons = 0
